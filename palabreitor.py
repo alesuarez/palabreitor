@@ -3,13 +3,11 @@
 
 import argparse
 import ctypes
-import itertools
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
-import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -40,6 +38,20 @@ if sys.platform == "win32":
 
 from faster_whisper import WhisperModel
 
+import faster_whisper.transcribe as _fw_transcribe
+
+
+class _CleanProgressBar(_fw_transcribe.tqdm):
+    def __init__(self, *args, **kwargs):
+        kwargs.setdefault(
+            "bar_format",
+            "{l_bar}{bar} {percentage:3.0f}% | {elapsed} procesado, quedan {remaining} | {rate_fmt}",
+        )
+        super().__init__(*args, **kwargs)
+
+
+_fw_transcribe.tqdm = _CleanProgressBar
+
 MODEL = "large-v3-turbo"
 LANG = "es"
 
@@ -60,41 +72,21 @@ def extract_audio(video: Path, wav: Path) -> None:
     )
 
 
-def _transcribe_with_spinner(segments, message: str = "Transcribiendo") -> list:
-    chars = itertools.cycle("/-\\|")
-    stop = threading.Event()
-
-    def spin() -> None:
-        while not stop.is_set():
-            sys.stdout.write(f"\r{message} {next(chars)}")
-            sys.stdout.flush()
-            time.sleep(0.1)
-
-    t = threading.Thread(target=spin, daemon=True)
-    t.start()
-    try:
-        result = list(segments)
-        return result
-    finally:
-        stop.set()
-        t.join()
-        sys.stdout.write("\r" + " " * (len(message) + 2) + "\r")
-        sys.stdout.flush()
-
-
 def transcribe(wav: Path, device: str) -> list:
     print(f"Cargando modelo {MODEL} en {device.upper()}...")
     compute = "float16" if device == "cuda" else "int8"
     model = WhisperModel(MODEL, device=device, compute_type=compute)
+    print("Preparando audio (detección de voz)...")
     segments, info = model.transcribe(
         str(wav),
         language=LANG,
         vad_filter=True,
         vad_parameters={"min_silence_duration_ms": 500},
+        log_progress=True,
     )
     print(f"Idioma detectado: {info.language} ({info.language_probability * 100:.0f}%)")
-    print("Procesando audio (no cierres la ventana)...")
-    return _transcribe_with_spinner(segments)
+    print("Transcribiendo...")
+    return list(segments)
 
 
 def write_txt(segments: list, out: Path) -> None:
