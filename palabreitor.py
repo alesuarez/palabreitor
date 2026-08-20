@@ -3,11 +3,15 @@
 
 import argparse
 import ctypes
+import itertools
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
+import threading
+import time
+from datetime import datetime
 from pathlib import Path
 
 import ctranslate2
@@ -56,11 +60,32 @@ def extract_audio(video: Path, wav: Path) -> None:
     )
 
 
+def _transcribe_with_spinner(segments, message: str = "Transcribiendo") -> list:
+    chars = itertools.cycle("/-\\|")
+    stop = threading.Event()
+
+    def spin() -> None:
+        while not stop.is_set():
+            sys.stdout.write(f"\r{message} {next(chars)}")
+            sys.stdout.flush()
+            time.sleep(0.1)
+
+    t = threading.Thread(target=spin, daemon=True)
+    t.start()
+    try:
+        result = list(segments)
+        return result
+    finally:
+        stop.set()
+        t.join()
+        sys.stdout.write("\r" + " " * (len(message) + 2) + "\r")
+        sys.stdout.flush()
+
+
 def transcribe(wav: Path, device: str) -> list:
     print(f"Cargando modelo {MODEL} en {device.upper()}...")
     compute = "float16" if device == "cuda" else "int8"
     model = WhisperModel(MODEL, device=device, compute_type=compute)
-    print("Transcribiendo...")
     segments, info = model.transcribe(
         str(wav),
         language=LANG,
@@ -68,7 +93,8 @@ def transcribe(wav: Path, device: str) -> list:
         vad_parameters={"min_silence_duration_ms": 500},
     )
     print(f"Idioma detectado: {info.language} ({info.language_probability * 100:.0f}%)")
-    return list(segments)
+    print("Procesando audio (no cierres la ventana)...")
+    return _transcribe_with_spinner(segments)
 
 
 def write_txt(segments: list, out: Path) -> None:
@@ -79,6 +105,18 @@ def write_txt(segments: list, out: Path) -> None:
             lines.append(f"[{fmt_ts(seg.start)}] {text}")
     out.write_text("\n".join(lines) + "\n", encoding="utf-8")
     print(f"Guardado: {out}")
+
+
+def human_size(num: float) -> str:
+    for unit in ("B", "KB", "MB", "GB"):
+        if num < 1024 or unit == "GB":
+            return f"{num:.1f} {unit}" if unit != "B" else f"{int(num)} B"
+        num /= 1024
+    return f"{num:.1f} GB"
+
+
+def fmt_clock(dt) -> str:
+    return dt.strftime("%H:%M:%S")
 
 
 def main() -> None:
@@ -95,6 +133,8 @@ def main() -> None:
         help="Dispositivo de inferencia (auto detecta GPU NVIDIA)",
     )
     args = parser.parse_args()
+
+    t_start = time.time()
 
     video = Path(args.input)
     out = Path(args.output)
@@ -120,6 +160,24 @@ def main() -> None:
 
     write_txt(segments, out)
     print(f"Segmentos: {len(segments)} | Duración total: {fmt_ts(segments[-1].end) if segments else '00:00:00'}")
+
+    elapsed = time.time() - t_start
+    if elapsed < 60:
+        tiempo = f"{elapsed:.0f} seg"
+    else:
+        mins, secs = divmod(int(elapsed), 60)
+        tiempo = f"{mins:02d}:{secs:02d} min"
+    print()
+    print("=" * 52)
+    print("  RESUMEN DE PROCESAMIENTO")
+    print("=" * 52)
+    print(f"  Archivo de entrada : {video.name}")
+    print(f"  Archivo de salida  : {out}  ({human_size(out.stat().st_size)})")
+    print(f"  Hora de inicio     : {fmt_clock(datetime.fromtimestamp(t_start))}")
+    print(f"  Hora de fin        : {fmt_clock(datetime.now())}")
+    print(f"  Tamaño de entrada  : {human_size(video.stat().st_size)}")
+    print(f"  Tiempo de proceso  : {tiempo}")
+    print("=" * 52)
 
 
 if __name__ == "__main__":
