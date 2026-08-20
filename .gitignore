@@ -1,0 +1,26 @@
+# Entorno virtual
+.venv/
+venv/
+
+# Scripts generados
+*_script.txt
+salida_script.txt
+
+# Caché de Python
+__pycache__/
+*.py[cod]
+
+# Caché de modelos HuggingFace
+.cache/
+.cache/huggingface/
+
+# IDE
+.vscode/
+.idea/
+
+# Windows
+Thumbs.db
+Desktop.ini
+
+# Clipboards temporales
+*.tmp
